@@ -373,6 +373,13 @@ class EightSleepThermostat(EightSleepBaseEntity, ClimateEntity, RestoreEntity):
         if temperature is not None:
             self._attr_target_temperature = temperature
 
+        # Some Home Assistant climate cards include the entity's current OFF mode
+        # in the same service call when the user changes the level. A real level
+        # change should take precedence and power the side on. An OFF-only call
+        # still turns the side off normally.
+        if temperature is not None and requested_hvac_mode == HVACMode.OFF:
+            requested_hvac_mode = HVACMode.HEAT_COOL
+
         if requested_hvac_mode is not None:
             await self.async_set_hvac_mode(requested_hvac_mode)
             self.async_write_ha_state()
@@ -382,9 +389,17 @@ class EightSleepThermostat(EightSleepBaseEntity, ClimateEntity, RestoreEntity):
         if temperature is None:
             return
 
+        # Changing the level while the side is off powers it on.
+        # The power-on path restores the target level stored above, so we
+        # return afterward to avoid sending the same level twice.
+        if self._should_defer_temperature():
+            _LOGGER.debug(
+                "Set Level (OFF): turning side on and applying level %s",
+                temperature,
+            )
+            await self.async_set_hvac_mode(HVACMode.HEAT_COOL)
+            self.async_write_ha_state()
+            return
+
         async with self._command_lock:
-            if self._should_defer_temperature():
-                _LOGGER.debug("Set Level (OFF): storing %s without powering on", temperature)
-                self.async_write_ha_state()
-                return
             await self._async_apply_heating_level(temperature)
